@@ -1,0 +1,1014 @@
+// ==UserScript==
+// @name         Zed Champions Auction Filter and Sort
+// @namespace    http://tampermonkey.net/
+// @version      0.8
+// @description  Filter auctions by star rating, bloodline, and first-place wins, sort by time or price, and display average price per bloodline on Zed Champions with enhanced aesthetics
+// @author       You
+// @match        https://app.zedchampions.com/auctions
+// @icon         https://www.google.com/s2/favicons?sz=64&domain=zedchampions.com
+// @grant        none
+// ==/UserScript==
+
+(function() {
+    'use strict';
+
+    // Configuration
+    const CONFIG = {
+        REFRESH_INTERVAL: 1000,
+        DEBOUNCE_DELAY: 200,
+        STATUS_HIDE_DELAY: 2000,
+        SELECTORS: {
+            CARDS: [
+                '[class*="auction-card"]',
+                '.css-4k37cb',
+                '.auction-horse-card',
+                '[class*="AuctionCard"]',
+                '.css-4rd92r',
+                '[class*="Card"]'
+            ].join(', '),
+            RECORDS: [
+                '[class*="record"]',
+                '[class*="Record"]',
+                '[class*="race"]',
+                '[class*="Race"]',
+                'span:not(.exclude)',
+                'div:not(.exclude)',
+                'p:not(.exclude)'
+            ],
+            CONTAINER: [
+                '#auctionlist-container',
+                '.css-1v5qfvc',
+                '.css-14v29z6',
+                '.css-1tvu0bo'
+            ].join(', ')
+        },
+        STYLES: `
+            .zed-filter-container {
+                position: sticky;
+                top: 0;
+                background: linear-gradient(135deg, #1E293B 0%, #2D3748 100%);
+                padding: 16px 24px;
+                z-index: 1000;
+                display: flex;
+                flex-wrap: wrap;
+                gap: 12px 24px;
+                border-bottom: 2px solid #4B5EAA;
+                align-items: center;
+                box-shadow: 0 4px 12px rgba(0, 0, 0, 0.2);
+                font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
+            }
+            .zed-filter-row {
+                display: flex;
+                flex-wrap: wrap;
+                gap: 24px;
+                flex: 1;
+                align-items: center;
+            }
+            .zed-filter-group {
+                display: flex;
+                flex-direction: column;
+                gap: 8px;
+            }
+            .zed-filter-group label {
+                font-weight: 600;
+                color: #E2E8F0;
+                font-size: 14px;
+                white-space: nowrap;
+                letter-spacing: 0.02em;
+            }
+            .zed-filter-buttons {
+                display: flex;
+                flex-wrap: wrap;
+                gap: 8px;
+            }
+            .zed-filter-btn {
+                color: #E2E8F0;
+                border: 1px solid #64748B;
+                padding: 8px 12px;
+                border-radius: 6px;
+                cursor: pointer;
+                min-width: 44px;
+                text-align: center;
+                font-size: 13px;
+                font-weight: 500;
+                transition: all 0.2s ease;
+            }
+            .zed-star-btn {
+                background: linear-gradient(45deg, #FFD700 0%, #FFA500 100%);
+                color: #1A202C;
+            }
+            .zed-star-btn:hover {
+                background: linear-gradient(45deg, #FFE066 0%, #FFB733 100%);
+                transform: translateY(-1px);
+            }
+            .zed-star-btn.active {
+                background: linear-gradient(45deg, #FFFF99 0%, #FFCA66 100%);
+                color: #1A202C;
+                border-color: #FFD700;
+            }
+            .zed-bloodline-btn {
+                min-width: 100px;
+                color: #FFFFFF;
+            }
+            .zed-bloodline-btn.nakamoto {
+                background: #DC2626;
+                border-color: #DC2626;
+            }
+            .zed-bloodline-btn.nakamoto:hover {
+                background: #EF4444;
+                transform: translateY(-1px);
+            }
+            .zed-bloodline-btn.nakamoto.active {
+                background: #F87171;
+                border-color: #F87171;
+            }
+            .zed-bloodline-btn.szabo {
+                background: #2563EB;
+                border-color: #2563EB;
+            }
+            .zed-bloodline-btn.szabo:hover {
+                background: #3B82F6;
+                transform: translateY(-1px);
+            }
+            .zed-bloodline-btn.szabo.active {
+                background: #60A5FA;
+                border-color: #60A5FA;
+            }
+            .zed-bloodline-btn.finney {
+                background: #7C3AED;
+                border-color: #7C3AED;
+            }
+            .zed-bloodline-btn.finney:hover {
+                background: #8B5CF6;
+                transform: translateY(-1px);
+            }
+            .zed-bloodline-btn.finney.active {
+                background: #A78BFA;
+                border-color: #A78BFA;
+            }
+            .zed-bloodline-btn.buterin {
+                background: #D97706;
+                border-color: #D97706;
+                color: #FFFFFF;
+            }
+            .zed-bloodline-btn.buterin:hover {
+                background: #F59E0B;
+                transform: translateY(-1px);
+            }
+            .zed-bloodline-btn.buterin.active {
+                background: #FBBF24;
+                border-color: #FBBF24;
+            }
+            .zed-first-place-group {
+                display: flex;
+                align-items: center;
+                gap: 10px;
+            }
+            .zed-first-place-checkbox {
+                width: 18px;
+                height: 18px;
+                cursor: pointer;
+                accent-color: #7F9CF5;
+                transition: all 0.2s ease;
+            }
+            .zed-first-place-checkbox:hover {
+                transform: scale(1.1);
+            }
+            .zed-controls-group {
+                display: flex;
+                gap: 12px;
+                flex-wrap: wrap;
+                align-items: center;
+                justify-content: flex-end;
+                margin-left: auto;
+            }
+            .zed-sort-select {
+                background: #4B5EAA;
+                color: #E2E8F0;
+                border: none;
+                padding: 10px 18px;
+                border-radius: 6px;
+                cursor: pointer;
+                font-weight: 600;
+                font-size: 14px;
+                transition: all 0.2s ease;
+                appearance: none;
+                background-image: url('data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" fill="%23E2E8F0"><path d="M6 8L2 4h8z"/></svg>');
+                background-repeat: no-repeat;
+                background-position: right 12px center;
+            }
+            .zed-sort-select:hover {
+                background: #5A67D8;
+                transform: translateY(-1px);
+            }
+            .zed-sort-select option {
+                background: #2D3748;
+                color: #E2E8F0;
+            }
+            .zed-reset-btn {
+                background: #E53E3E;
+                color: #E2E8F0;
+                border: none;
+                padding: 10px 18px;
+                border-radius: 6px;
+                cursor: pointer;
+                font-weight: 600;
+                font-size: 14px;
+                transition: all 0.2s ease;
+            }
+            .zed-reset-btn:hover {
+                background: #F56565;
+                transform: translateY(-1px);
+            }
+            .zed-card-hidden {
+                display: none !important;
+            }
+            .zed-status-box {
+                background: rgba(45, 55, 72, 0.95);
+                color: #E2E8F0;
+                padding: 8px 16px;
+                border-radius: 6px;
+                font-size: 13px;
+                font-weight: 500;
+                display: none;
+                align-self: flex-start;
+                min-width: 180px;
+                text-align: center;
+                animation: fadeIn 0.3s ease;
+                border: 1px solid #4B5EAA;
+            }
+            .zed-status-container {
+                display: flex;
+                align-items: center;
+                margin-left: auto;
+                margin-right: 24px;
+            }
+            .zed-avg-price-container {
+                display: flex;
+                flex-wrap: wrap;
+                gap: 16px;
+                padding: 12px 0;
+                border-top: 1px solid #4B5EAA;
+                margin-top: 12px;
+                width: 100%;
+            }
+            .zed-avg-price-item {
+                display: flex;
+                flex-direction: column;
+                align-items: center;
+                min-width: 120px;
+            }
+            .zed-avg-price-label {
+                font-weight: 600;
+                color: #E2E8F0;
+                font-size: 14px;
+                margin-bottom: 4px;
+            }
+            .zed-avg-price-value {
+                font-size: 13px;
+                font-weight: 500;
+                padding: 6px 10px;
+                border-radius: 6px;
+                color: #1A202C;
+            }
+            .zed-avg-price-value.nakamoto {
+                background: #F87171;
+            }
+            .zed-avg-price-value.szabo {
+                background: #60A5FA;
+            }
+            .zed-avg-price-value.finney {
+                background: #A78BFA;
+            }
+            .zed-avg-price-value.buterin {
+                background: #FBBF24;
+            }
+            @keyframes fadeIn {
+                from { opacity: 0; transform: translateY(-4px); }
+                to { opacity: 1; transform: translateY(0); }
+            }
+            @media (max-width: 768px) {
+                .zed-filter-container {
+                    padding: 12px 16px;
+                    gap: 8px 16px;
+                }
+                .zed-filter-row {
+                    gap: 16px;
+                }
+                .zed-filter-btn {
+                    padding: 6px 10px;
+                    font-size: 12px;
+                }
+                .zed-bloodline-btn {
+                    min-width: 80px;
+                }
+                .zed-sort-select, .zed-reset-btn {
+                    padding: 8px 12px;
+                    font-size: 13px;
+                }
+                .zed-status-container {
+                    margin-right: 16px;
+                    margin-left: 0;
+                }
+                .zed-controls-group {
+                    margin-left: 0;
+                    justify-content: flex-start;
+                }
+                .zed-avg-price-item {
+                    min-width: 100px;
+                }
+            }
+            @media (max-width: 480px) {
+                .zed-filter-container {
+                    flex-direction: column;
+                    align-items: flex-start;
+                }
+                .zed-filter-row {
+                    flex-direction: column;
+                    gap: 12px;
+                }
+                .zed-status-container {
+                    margin: 8px 0;
+                }
+                .zed-controls-group {
+                    width: 100%;
+                    justify-content: space-between;
+                }
+                .zed-avg-price-container {
+                    gap: 12px;
+                }
+            }
+        `
+    };
+
+    // State management
+    const state = {
+        activeStarFilters: [],
+        activeBloodlineFilters: [],
+        isFirstPlaceFilterActive: false,
+        sortType: 'time', // 'time' or 'price'
+        sortAsc: true,
+        isProcessing: false,
+        isInitialized: false,
+        lastTotalAuctions: 0,
+        isScanning: false,
+        lastFilterTime: 0
+    };
+
+    // Utility: Debounce function
+    function debounce(func, wait) {
+        let timeout;
+        return function executedFunction(...args) {
+            const later = () => {
+                clearTimeout(timeout);
+                func(...args);
+            };
+            clearTimeout(timeout);
+            timeout = setTimeout(later, wait);
+        };
+    }
+
+    // UI Creation
+    function createFilterUI() {
+        try {
+            const container = document.createElement('div');
+            container.className = 'zed-filter-container';
+
+            const filterRow = document.createElement('div');
+            filterRow.className = 'zed-filter-row';
+
+            // Star rating filter group
+            const starFilterGroup = document.createElement('div');
+            starFilterGroup.className = 'zed-filter-group';
+            const starLabel = document.createElement('label');
+            starLabel.textContent = 'Star Rating';
+            starFilterGroup.appendChild(starLabel);
+            const starButtons = document.createElement('div');
+            starButtons.className = 'zed-filter-buttons';
+            for (let i = 1; i <= 5; i++) {
+                const wholeBtn = document.createElement('button');
+                wholeBtn.className = 'zed-filter-btn zed-star-btn';
+                wholeBtn.textContent = `${i} ★`;
+                wholeBtn.dataset.stars = i.toString();
+                wholeBtn.addEventListener('click', toggleStarFilter);
+                starButtons.appendChild(wholeBtn);
+                if (i < 5) {
+                    const halfBtn = document.createElement('button');
+                    halfBtn.className = 'zed-filter-btn zed-star-btn';
+                    halfBtn.textContent = `${i + 0.5} ★`;
+                    halfBtn.dataset.stars = (i + 0.5).toString();
+                    halfBtn.addEventListener('click', toggleStarFilter);
+                    starButtons.appendChild(halfBtn);
+                }
+            }
+            starFilterGroup.appendChild(starButtons);
+            filterRow.appendChild(starFilterGroup);
+
+            // Bloodline filter group
+            const bloodlineFilterGroup = document.createElement('div');
+            bloodlineFilterGroup.className = 'zed-filter-group';
+            const bloodlineLabel = document.createElement('label');
+            bloodlineLabel.textContent = 'Bloodline';
+            bloodlineFilterGroup.appendChild(bloodlineLabel);
+            const bloodlineButtons = document.createElement('div');
+            bloodlineButtons.className = 'zed-filter-buttons';
+            const bloodlines = [
+                { name: 'NAKAMOTO', class: 'nakamoto' },
+                { name: 'SZABO', class: 'szabo' },
+                { name: 'FINNEY', class: 'finney' },
+                { name: 'BUTERIN', class: 'buterin' }
+            ];
+            bloodlines.forEach(bloodline => {
+                const btn = document.createElement('button');
+                btn.className = `zed-filter-btn zed-bloodline-btn ${bloodline.class}`;
+                btn.textContent = bloodline.name.charAt(0) + bloodline.name.slice(1).toLowerCase();
+                btn.dataset.bloodline = bloodline.name;
+                btn.addEventListener('click', toggleBloodlineFilter);
+                bloodlineButtons.appendChild(btn);
+            });
+            bloodlineFilterGroup.appendChild(bloodlineButtons);
+            filterRow.appendChild(bloodlineFilterGroup);
+
+            // First place filter group
+            const firstPlaceGroup = document.createElement('div');
+            firstPlaceGroup.className = 'zed-filter-group zed-first-place-group';
+            const checkbox = document.createElement('input');
+            checkbox.type = 'checkbox';
+            checkbox.id = 'first-place-filter';
+            checkbox.className = 'zed-first-place-checkbox';
+            const label = document.createElement('label');
+            label.htmlFor = 'first-place-filter';
+            label.textContent = '1+ First Place';
+            label.style.color = '#E2E8F0';
+            label.style.fontSize = '14px';
+            checkbox.addEventListener('change', () => {
+                state.isFirstPlaceFilterActive = checkbox.checked;
+                processAuctions();
+            });
+            firstPlaceGroup.append(checkbox, label);
+            filterRow.appendChild(firstPlaceGroup);
+
+            // Status container
+            const statusContainer = document.createElement('div');
+            statusContainer.className = 'zed-status-container';
+            const statusElement = document.createElement('div');
+            statusElement.className = 'zed-status-box';
+            statusElement.textContent = 'Ready';
+            statusContainer.appendChild(statusElement);
+            filterRow.appendChild(statusContainer);
+
+            // Controls group
+            const controlsGroup = document.createElement('div');
+            controlsGroup.className = 'zed-controls-group';
+            const sortSelect = document.createElement('select');
+            sortSelect.className = 'zed-sort-select';
+            const timeOption = document.createElement('option');
+            timeOption.value = 'time';
+            timeOption.textContent = 'Sort by Time ↑';
+            const priceOption = document.createElement('option');
+            priceOption.value = 'price';
+            priceOption.textContent = 'Sort by Price ↑';
+            sortSelect.append(timeOption, priceOption);
+            sortSelect.value = state.sortType;
+            sortSelect.addEventListener('change', toggleSort);
+            const resetBtn = document.createElement('button');
+            resetBtn.className = 'zed-reset-btn';
+            resetBtn.textContent = 'Reset';
+            resetBtn.addEventListener('click', resetFilters);
+            controlsGroup.append(sortSelect, resetBtn);
+            container.append(filterRow, controlsGroup);
+
+            // Average price container
+            const avgPriceContainer = document.createElement('div');
+            avgPriceContainer.className = 'zed-avg-price-container';
+            const avgPriceElements = {};
+            bloodlines.forEach(bloodline => {
+                const item = document.createElement('div');
+                item.className = 'zed-avg-price-item';
+                const label = document.createElement('div');
+                label.className = 'zed-avg-price-label';
+                label.textContent = bloodline.name.charAt(0) + bloodline.name.slice(1).toLowerCase();
+                const value = document.createElement('div');
+                value.className = `zed-avg-price-value ${bloodline.class}`;
+                value.textContent = 'N/A';
+                item.append(label, value);
+                avgPriceContainer.appendChild(item);
+                avgPriceElements[bloodline.name] = value;
+            });
+            container.appendChild(avgPriceContainer);
+
+            const targetElement = document.querySelector('main') || document.body;
+            targetElement.insertBefore(container, targetElement.firstChild);
+
+            return { statusElement, avgPriceElements };
+        } catch (error) {
+            console.error('Failed to create filter UI:', error);
+            return null;
+        }
+    }
+
+    // Data Extraction
+    function getStarRating(card) {
+        try {
+            const starContainer = card.querySelector('.css-k008qs, [class*="star-rating"]');
+            if (!starContainer) return 0;
+
+            const ratingText = starContainer.textContent?.trim() || '';
+            if (ratingText.match(/^[\d\.]+$/)) {
+                return parseFloat(ratingText);
+            } else if (ratingText.includes('★')) {
+                let rating = (ratingText.match(/★/g) || []).length;
+                if (ratingText.includes('½') || (ratingText.includes('☆') && rating > 0)) {
+                    rating += 0.5;
+                }
+                return rating;
+            }
+
+            // Fallback for old UI
+            const oldStarElements = starContainer.querySelectorAll('.css-1o988h9');
+            let fullStars = 0;
+            let hasHalfStar = false;
+            oldStarElements.forEach(starElement => {
+                if (starElement.querySelector('.css-1tt5dvj')) fullStars++;
+                else if (starElement.querySelector('.css-139eomv')) hasHalfStar = true;
+            });
+            return fullStars + (hasHalfStar ? 0.5 : 0);
+        } catch (error) {
+            console.error('Error getting star rating:', error);
+            return 0;
+        }
+    }
+
+    function getBloodline(card) {
+        try {
+            const textElements = card.querySelectorAll('p, div, span');
+            const bloodlines = ['NAKAMOTO', 'SZABO', 'FINNEY', 'BUTERIN'];
+            for (const element of textElements) {
+                const text = element.textContent?.trim().toUpperCase();
+                for (const bloodline of bloodlines) {
+                    if (text === bloodline) return bloodline;
+                }
+            }
+            return null;
+        } catch (error) {
+            console.error('Error getting bloodline:', error);
+            return null;
+        }
+    }
+
+    function getFirstPlaceWins(card) {
+        try {
+            for (const selector of CONFIG.SELECTORS.RECORDS) {
+                const elements = card.querySelectorAll(selector);
+                for (const element of elements) {
+                    const text = element.textContent?.trim() || '';
+                    const recordMatch = text.match(/^(\d+)-(\d+)-(\d+)$/);
+                    if (recordMatch) {
+                        return parseInt(recordMatch[1], 10);
+                    }
+                }
+            }
+            const allText = card.textContent || '';
+            const generalMatch = allText.match(/\b(\d+)-(\d+)-(\d+)\b/);
+            return generalMatch ? parseInt(generalMatch[1], 10) : 0;
+        } catch (error) {
+            console.error('Error getting first place wins:', error);
+            return 0;
+        }
+    }
+
+    function getTimeRemainingInMinutes(card) {
+        try {
+            const timeElement = card.querySelector('.css-1baulvz, .css-1fb8s8w span, [class*="time-remaining"], div[class*="Time"] span');
+            if (!timeElement) return Infinity;
+
+            const timeText = timeElement.textContent?.trim() || '';
+            let days = 0, hours = 0, minutes = 0, seconds = 0;
+
+            const dayMatch = timeText.match(/(\d+)d/);
+            if (dayMatch && dayMatch[1]) days = parseInt(dayMatch[1]);
+
+            const hourMatch = timeText.match(/(\d+)h/);
+            if (hourMatch && hourMatch[1]) hours = parseInt(hourMatch[1]);
+
+            const minuteMatch = timeText.match(/(\d+)m/);
+            if (minuteMatch && minuteMatch[1]) minutes = parseInt(minuteMatch[1]);
+
+            const secondMatch = timeText.match(/(\d+)s/);
+            if (secondMatch && secondMatch[1]) seconds = parseInt(secondMatch[1]);
+
+            return (days * 24 * 60) + (hours * 60) + minutes + (seconds / 60);
+        } catch (error) {
+            console.error('Error getting time remaining:', error);
+            return Infinity;
+        }
+    }
+
+    function getPrice(card) {
+        try {
+            const priceElements = card.querySelectorAll('div[class*="top-bid"], [class*="price"], span[class*="bid-amount"]');
+            for (const element of priceElements) {
+                const priceText = element.textContent?.trim() || '';
+                const priceMatch = priceText.match(/(\d+(?:\.\d+)?)\s*ZED/i) || priceText.match(/Top\s*Bid\s*(\d+(?:\.\d+)?)/i);
+                if (priceMatch) {
+                    console.log(`Price extracted from ${card}: ${priceMatch[1]}`);
+                    return parseFloat(priceMatch[1]);
+                }
+            }
+            // Fallback: Search all text content
+            const allText = card.textContent || '';
+            const fallbackMatch = allText.match(/(\d+(?:\.\d+)?)\s*ZED/i) || allText.match(/Top\s*Bid\s*(\d+(?:\.\d+)?)/i);
+            if (fallbackMatch) {
+                console.log(`Fallback price extracted from ${card}: ${fallbackMatch[1]}`);
+                return parseFloat(fallbackMatch[1]);
+            }
+            console.log(`No price found for ${card}`);
+            return Infinity;
+        } catch (error) {
+            console.error('Error getting price:', error);
+            return Infinity;
+        }
+    }
+
+    // Average Price Calculation
+    function calculateAveragePrices(cards) {
+        try {
+            const pricesByBloodline = {
+                NAKAMOTO: [],
+                SZABO: [],
+                FINNEY: [],
+                BUTERIN: []
+            };
+
+            cards.forEach(card => {
+                if (card.classList.contains('zed-card-hidden')) return;
+                const bloodline = getBloodline(card);
+                const price = getPrice(card);
+                if (bloodline && price !== Infinity) {
+                    pricesByBloodline[bloodline].push(price);
+                }
+            });
+
+            const averages = {};
+            for (const bloodline in pricesByBloodline) {
+                const prices = pricesByBloodline[bloodline];
+                if (prices.length === 0) {
+                    averages[bloodline] = 'N/A';
+                } else {
+                    const avg = prices.reduce((sum, price) => sum + price, 0) / prices.length;
+                    averages[bloodline] = Math.round(avg).toLocaleString();
+                }
+            }
+            return averages;
+        } catch (error) {
+            console.error('Error calculating average prices:', error);
+            return { NAKAMOTO: 'N/A', SZABO: 'N/A', FINNEY: 'N/A', BUTERIN: 'N/A' };
+        }
+    }
+
+    // Filter and Sort Logic
+    const processAuctions = debounce(() => {
+        try {
+            const now = Date.now();
+            if (now - state.lastFilterTime < CONFIG.DEBOUNCE_DELAY / 2) return;
+            state.lastFilterTime = now;
+
+            if (state.isProcessing) return;
+            state.isProcessing = true;
+
+            const auctionCards = document.querySelectorAll(CONFIG.SELECTORS.CARDS);
+            const totalAuctions = auctionCards.length;
+
+            if (totalAuctions !== state.lastTotalAuctions) {
+                showStatusMessage(`Scanning ${totalAuctions} auctions...`);
+                state.isScanning = true;
+                state.lastTotalAuctions = totalAuctions;
+            }
+
+            auctionCards.forEach((card, index) => {
+                if (!card.dataset.originalIndex) {
+                    card.dataset.originalIndex = index;
+                }
+            });
+
+            let visibleAuctions = 0;
+            auctionCards.forEach(card => {
+                const starRating = getStarRating(card).toString();
+                const bloodline = getBloodline(card);
+                const firstPlaceWins = getFirstPlaceWins(card);
+
+                const matchesStarFilter = !state.activeStarFilters.length || state.activeStarFilters.includes(starRating);
+                const matchesBloodlineFilter = !state.activeBloodlineFilters.length || (bloodline && state.activeBloodlineFilters.includes(bloodline));
+                const matchesFirstPlaceFilter = !state.isFirstPlaceFilterActive || firstPlaceWins > 0;
+
+                const shouldShow = matchesStarFilter && matchesBloodlineFilter && matchesFirstPlaceFilter;
+                card.classList.toggle('zed-card-hidden', !shouldShow);
+                if (shouldShow) visibleAuctions++;
+            });
+
+            if (state.sortType === 'time' && state.sortAsc) {
+                sortCardsByTimeRemaining();
+            } else if (state.sortType === 'price' && state.sortAsc) {
+                sortCardsByPrice();
+            } else if (state.sortType === 'time' && !state.sortAsc) {
+                sortCardsByTimeRemainingDesc();
+            } else if (state.sortType === 'price' && !state.sortAsc) {
+                sortCardsByPriceDesc();
+            }
+
+            // Calculate and display average prices
+            const averages = calculateAveragePrices(auctionCards);
+            if (avgPriceElements) {
+                for (const bloodline in averages) {
+                    if (avgPriceElements[bloodline]) {
+                        avgPriceElements[bloodline].textContent = averages[bloodline] === 'N/A' ? 'N/A' : `${averages[bloodline]} ZED`;
+                    }
+                }
+            }
+
+            updateStatusMessage(`${visibleAuctions}/${totalAuctions} auctions`);
+            resetStatusHideTimer();
+
+            state.isProcessing = false;
+        } catch (error) {
+            console.error('Error processing auctions:', error);
+            state.isProcessing = false;
+        }
+    }, CONFIG.DEBOUNCE_DELAY);
+
+    function toggleStarFilter(event) {
+        try {
+            const starValue = event.target.dataset.stars;
+            if (state.activeStarFilters.includes(starValue)) {
+                state.activeStarFilters = state.activeStarFilters.filter(s => s !== starValue);
+                event.target.classList.remove('active');
+            } else {
+                state.activeStarFilters.push(starValue);
+                event.target.classList.add('active');
+            }
+            processAuctions();
+        } catch (error) {
+            console.error('Error toggling star filter:', error);
+        }
+    }
+
+    function toggleBloodlineFilter(event) {
+        try {
+            const bloodlineValue = event.target.dataset.bloodline;
+            if (state.activeBloodlineFilters.includes(bloodlineValue)) {
+                state.activeBloodlineFilters = state.activeBloodlineFilters.filter(b => b !== bloodlineValue);
+                event.target.classList.remove('active');
+            } else {
+                state.activeBloodlineFilters.push(bloodlineValue);
+                event.target.classList.add('active');
+            }
+            processAuctions();
+        } catch (error) {
+            console.error('Error toggling bloodline filter:', error);
+        }
+    }
+
+    function toggleSort(event) {
+        try {
+            const value = event.target.value;
+            state.sortType = value;
+            state.sortAsc = !state.sortAsc;
+            const sortSelect = document.querySelector('.zed-sort-select');
+            if (sortSelect) {
+                sortSelect.value = value;
+                sortSelect.options[0].textContent = `Sort by Time ${state.sortType === 'time' && !state.sortAsc ? '↓' : '↑'}`;
+                sortSelect.options[1].textContent = `Sort by Price ${state.sortType === 'price' && !state.sortAsc ? '↓' : '↑'}`;
+            }
+            console.log(`Sort toggled to ${state.sortType}, ${state.sortAsc ? 'ascending' : 'descending'}`);
+            processAuctions();
+        } catch (error) {
+            console.error('Error toggling sort:', error);
+        }
+    }
+
+    function resetFilters() {
+        try {
+            state.activeStarFilters = [];
+            document.querySelectorAll('.zed-filter-btn[data-stars]').forEach(btn => btn.classList.remove('active'));
+
+            state.activeBloodlineFilters = [];
+            document.querySelectorAll('.zed-filter-btn[data-bloodline]').forEach(btn => btn.classList.remove('active'));
+
+            state.isFirstPlaceFilterActive = false;
+            const checkbox = document.getElementById('first-place-filter');
+            if (checkbox) checkbox.checked = false;
+
+            state.sortType = 'time';
+            state.sortAsc = true;
+            const sortSelect = document.querySelector('.zed-sort-select');
+            if (sortSelect) {
+                sortSelect.value = 'time';
+                sortSelect.options[0].textContent = 'Sort by Time ↑';
+                sortSelect.options[1].textContent = 'Sort by Price ↑';
+            }
+
+            const auctionContainer = document.querySelector(CONFIG.SELECTORS.CONTAINER);
+            if (auctionContainer) {
+                const cards = Array.from(auctionContainer.querySelectorAll(CONFIG.SELECTORS.CARDS));
+                cards.sort((a, b) => parseInt(a.dataset.originalIndex || 0) - parseInt(b.dataset.originalIndex || 0));
+                cards.forEach(card => auctionContainer.appendChild(card));
+            }
+
+            document.querySelectorAll(CONFIG.SELECTORS.CARDS).forEach(card => card.classList.remove('zed-card-hidden'));
+
+            const totalAuctions = document.querySelectorAll(CONFIG.SELECTORS.CARDS).length;
+            updateStatusMessage(`${totalAuctions}/${totalAuctions} auctions`);
+            processAuctions();
+        } catch (error) {
+            console.error('Error resetting filters:', error);
+        }
+    }
+
+    function sortCardsByTimeRemaining() {
+        try {
+            const auctionContainer = document.querySelector(CONFIG.SELECTORS.CONTAINER);
+            if (!auctionContainer) {
+                console.error('Auction container not found');
+                return;
+            }
+
+            const cards = Array.from(auctionContainer.querySelectorAll(CONFIG.SELECTORS.CARDS))
+                .filter(card => !card.classList.contains('zed-card-hidden'));
+
+            if (cards.length === 0) return;
+
+            cards.sort((a, b) => getTimeRemainingInMinutes(a) - getTimeRemainingInMinutes(b));
+            cards.forEach(card => auctionContainer.appendChild(card));
+        } catch (error) {
+            console.error('Error sorting cards by time:', error);
+        }
+    }
+
+    function sortCardsByTimeRemainingDesc() {
+        try {
+            const auctionContainer = document.querySelector(CONFIG.SELECTORS.CONTAINER);
+            if (!auctionContainer) {
+                console.error('Auction container not found');
+                return;
+            }
+
+            const cards = Array.from(auctionContainer.querySelectorAll(CONFIG.SELECTORS.CARDS))
+                .filter(card => !card.classList.contains('zed-card-hidden'));
+
+            if (cards.length === 0) return;
+
+            cards.sort((a, b) => getTimeRemainingInMinutes(b) - getTimeRemainingInMinutes(a));
+            cards.forEach(card => auctionContainer.appendChild(card));
+        } catch (error) {
+            console.error('Error sorting cards by time (desc):', error);
+        }
+    }
+
+    function sortCardsByPrice() {
+        try {
+            const auctionContainer = document.querySelector(CONFIG.SELECTORS.CONTAINER);
+            if (!auctionContainer) {
+                console.error('Auction container not found');
+                return;
+            }
+
+            const cards = Array.from(auctionContainer.querySelectorAll(CONFIG.SELECTORS.CARDS))
+                .filter(card => !card.classList.contains('zed-card-hidden'));
+
+            if (cards.length === 0) return;
+
+            cards.sort((a, b) => {
+                const priceA = getPrice(a);
+                const priceB = getPrice(b);
+                console.log(`Sorting: ${priceA} vs ${priceB}`);
+                return priceA - priceB;
+            });
+            cards.forEach(card => auctionContainer.appendChild(card));
+        } catch (error) {
+            console.error('Error sorting cards by price:', error);
+        }
+    }
+
+    function sortCardsByPriceDesc() {
+        try {
+            const auctionContainer = document.querySelector(CONFIG.SELECTORS.CONTAINER);
+            if (!auctionContainer) {
+                console.error('Auction container not found');
+                return;
+            }
+
+            const cards = Array.from(auctionContainer.querySelectorAll(CONFIG.SELECTORS.CARDS))
+                .filter(card => !card.classList.contains('zed-card-hidden'));
+
+            if (cards.length === 0) return;
+
+            cards.sort((a, b) => {
+                const priceA = getPrice(a);
+                const priceB = getPrice(b);
+                console.log(`Sorting (desc): ${priceB} vs ${priceA}`);
+                return priceB - priceA;
+            });
+            cards.forEach(card => auctionContainer.appendChild(card));
+        } catch (error) {
+            console.error('Error sorting cards by price (desc):', error);
+        }
+    }
+
+    // Status Management
+    let statusElement = null;
+    let avgPriceElements = null;
+    let statusHideTimer = null;
+
+    function showStatusMessage(message) {
+        if (statusElement) {
+            statusElement.textContent = message;
+            statusElement.style.display = 'block';
+        }
+    }
+
+    function updateStatusMessage(message) {
+        if (statusElement) {
+            statusElement.textContent = message;
+            statusElement.style.display = 'block';
+        }
+    }
+
+    function resetStatusHideTimer() {
+        if (statusHideTimer) clearTimeout(statusHideTimer);
+        statusHideTimer = setTimeout(() => {
+            if (state.isScanning && statusElement) {
+                state.isScanning = false;
+                const totalAuctions = document.querySelectorAll(CONFIG.SELECTORS.CARDS).length;
+                const visibleAuctions = document.querySelectorAll(`${CONFIG.SELECTORS.CARDS}:not(.zed-card-hidden)`).length;
+                updateStatusMessage(`${visibleAuctions}/${totalAuctions} auctions`);
+            }
+        }, CONFIG.STATUS_HIDE_DELAY);
+    }
+
+    // Content Observer
+    function setupObserver() {
+        try {
+            const observer = new MutationObserver(() => {
+                if (state.activeStarFilters.length || state.activeBloodlineFilters.length || state.isFirstPlaceFilterActive || state.sortType) {
+                    processAuctions();
+                }
+            });
+            observer.observe(document.body, {
+                childList: true,
+                subtree: true,
+                attributes: true,
+                attributeFilter: ['class']
+            });
+            return observer;
+        } catch (error) {
+            console.error('Failed to setup observer:', error);
+            return null;
+        }
+    }
+
+    // Styles
+    function addStyles() {
+        try {
+            const styleElement = document.createElement('style');
+            styleElement.textContent = CONFIG.STYLES;
+            document.head.appendChild(styleElement);
+        } catch (error) {
+            console.error('Failed to add styles:', error);
+        }
+    }
+
+    // Initialization
+    function initialize() {
+        if (state.isInitialized || window.location.href !== 'https://app.zedchampions.com/auctions') {
+            console.log('Initialization skipped: Already initialized or wrong page');
+            return;
+        }
+        state.isInitialized = true;
+
+        console.log('Initializing Zed Champions Auction Filter and Sort v0.8');
+
+        addStyles();
+        const ui = createFilterUI();
+        if (ui) {
+            statusElement = ui.statusElement;
+            avgPriceElements = ui.avgPriceElements;
+        }
+
+        const observer = setupObserver();
+        setTimeout(processAuctions, 500);
+        const intervalId = setInterval(processAuctions, CONFIG.REFRESH_INTERVAL);
+
+        window.addEventListener('unload', () => {
+            if (observer) observer.disconnect();
+            if (statusHideTimer) clearTimeout(statusHideTimer);
+            clearInterval(intervalId);
+        });
+    }
+
+    // Start
+    if (document.readyState === 'loading') {
+        document.addEventListener('DOMContentLoaded', initialize);
+    } else {
+        setTimeout(initialize, 500);
+    }
+})();
